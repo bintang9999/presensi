@@ -142,30 +142,34 @@ def tembak_presensi(idp, kode, matkul):
         return False
 
 def monitoring():
-    print("🚀 Bot v5.2 (Adaptive Namespace) Aktif!")
-    send_telegram("🚀 *Bot v5.2 Adaptive Aktif*")
+    print("🚀 Bot v5.3 (Health Check Active) Aktif!")
+    # Kirim sinyal hidup saat pertama kali start
+    send_telegram("🚀 *Bot v5.3 Aktif*\nStatus: Memantau 24/7")
     
     if not sync_session_and_namespace():
         return
 
     sudah_absen = load_state()
+    loop_count = 0
 
     while True:
         try:
-            # Gunakan Namespace hasil login untuk memantau API
+            # Setiap 20 kali pengecekan (sekitar 1 jam), kirim kabar ke Telegram
+            # Agar kamu tahu bot masih hidup tanpa perlu nanya
+            if loop_count >= 20:
+                send_telegram("🛡️ *Laporan Rutin*: Bot masih standby memantau presensi.")
+                loop_count = 0
+            
             api_url = f"{BASE_URL}/{CURRENT_NAMESPACE}/api/datatable/perkuliahan/daftar_pertemuan_presensi_mahasiswa/{ID_MHS}"
             r = session.get(api_url, params={"length": 15}, headers=HEADERS, timeout=15)
 
-            # Jika Namespace kadaluwarsa atau Sesi mati (Redirect ke login)
-            if r.status_code != 200 or "json" not in r.headers.get("Content-Type", "") or "auth/login" in r.url:
-                print(f"\n⚠️ Namespace {CURRENT_NAMESPACE[:5]} kadaluwarsa. Sinkronisasi ulang...")
+            if r.status_code != 200 or "json" not in r.headers.get("Content-Type", ""):
                 if sync_session_and_namespace():
                     continue 
                 else:
                     time.sleep(60)
                     continue
 
-            # Proses data jika JSON valid
             data = r.json().get("data", [])
             for m in data:
                 idp = str(m["id_pertemuan_presensi"])
@@ -174,18 +178,17 @@ def monitoring():
                 is_done = str(m.get("status_presensi", "0"))
 
                 if kode and kode != "-" and is_done == "0" and idp not in sudah_absen:
-                    print(f"🔥 Target Ditemukan: {matkul} -> {kode}")
                     if tembak_presensi(idp, kode, matkul):
                         sudah_absen.add(idp)
                         save_state(sudah_absen)
 
-            # Jitter 120-180 detik (Human-like)
+            loop_count += 1
             sleep_time = random.randint(120, 180)
             print(f"⏳ Standby [{time.strftime('%H:%M:%S')}] Namespace: {CURRENT_NAMESPACE[:8]}", end="\r")
             time.sleep(sleep_time)
 
         except Exception as e:
-            print(f"\n⚠️ Re-syncing due to error: {e}")
+            print(f"\n⚠️ Error: {e}")
             time.sleep(30)
             sync_session_and_namespace()
 
@@ -193,4 +196,5 @@ def monitoring():
 SUDAH_ABSEN = load_state()
 
 if __name__ == "__main__":
+
     monitoring()
