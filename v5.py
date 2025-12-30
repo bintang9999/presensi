@@ -63,7 +63,7 @@ def sync_session_and_namespace():
     url_login = f"{BASE_URL}/auth/login"
     try:
         print("🔍 Sinkronisasi Namespace & Session...")
-        r_get = session.get(url_login, headers=HEADERS, timeout=15)
+        r_get = session.get(url_login, headers=HEADERS, timeout=60)
         
         # Validasi respon server
         if r_get.status_code != 200:
@@ -127,7 +127,7 @@ def tembak_presensi(idp, kode, matkul):
         # Update Referer agar identik dengan aktivitas manusia
         local_headers = {**HEADERS, "Referer": url_dashboard}
         
-        r = session.post(url_api, data=payload, headers=local_headers, timeout=15)
+        r = session.post(url_api, data=payload, headers=local_headers, timeout=60)
         
         if "json" in r.headers.get("Content-Type", ""):
             js = r.json()
@@ -198,6 +198,7 @@ SUDAH_ABSEN = load_state()
 if __name__ == "__main__":
 
     monitoring()
+
 
 
 
