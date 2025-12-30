@@ -63,7 +63,7 @@ def sync_session_and_namespace():
     url_login = f"{BASE_URL}/auth/login"
     try:
         print("🔍 Sinkronisasi Namespace & Session...")
-        r_get = session.get(url_login, headers=HEADERS, timeout=15)
+        r_get = session.get(url_login, headers=HEADERS, timeout=60)
         
         # Validasi respon server
         if r_get.status_code != 200:
@@ -198,3 +198,4 @@ SUDAH_ABSEN = load_state()
 if __name__ == "__main__":
 
     monitoring()
+
