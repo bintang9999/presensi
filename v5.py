@@ -111,7 +111,7 @@ def tembak_presensi(idp, kode, matkul):
     try:
         # 1. Kunjungi halaman dashboard untuk memicu rotasi CSRF token
         url_dashboard = f"{BASE_URL}/{CURRENT_NAMESPACE}/dashboard/perkuliahan/presensi"
-        session.get(url_dashboard, headers=HEADERS, timeout=15)
+        session.get(url_dashboard, headers=HEADERS, timeout=60)
         
         # 2. Ambil token terbaru dari cookie (CodeIgniter biasanya update ini otomatis)
         token_fresh = session.cookies.get("csrf_cookie_name")
@@ -161,7 +161,7 @@ def monitoring():
                 loop_count = 0
             
             api_url = f"{BASE_URL}/{CURRENT_NAMESPACE}/api/datatable/perkuliahan/daftar_pertemuan_presensi_mahasiswa/{ID_MHS}"
-            r = session.get(api_url, params={"length": 15}, headers=HEADERS, timeout=15)
+            r = session.get(api_url, params={"length": 15}, headers=HEADERS, timeout=60)
 
             if r.status_code != 200 or "json" not in r.headers.get("Content-Type", ""):
                 if sync_session_and_namespace():
@@ -198,4 +198,5 @@ SUDAH_ABSEN = load_state()
 if __name__ == "__main__":
 
     monitoring()
+
 
