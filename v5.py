@@ -60,7 +60,7 @@ signal.signal(signal.SIGINT, shutdown_handler)
 
 def sync_session_and_namespace():
     global CURRENT_NAMESPACE
-    url_login = f"{BASE_URL}/auth/login"
+    url_login = f"{BASE_URL}/welcome"
     try:
         print("🔍 Sinkronisasi Namespace & Session...")
         r_get = session.get(url_login, headers=HEADERS, timeout=60)
