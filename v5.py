@@ -60,23 +60,25 @@ signal.signal(signal.SIGINT, shutdown_handler)
 
 def sync_session_and_namespace():
     global CURRENT_NAMESPACE
-    url_login = f"{BASE_URL}/auth/login"
+    
+    url_form = f"{BASE_URL}/welcome" # URL tempat kita mengambil form & CSRF
+    url_post = f"{BASE_URL}/auth/login" # Default tebakan endpoint pemroses login
+
     try:
         print("🔍 Sinkronisasi Namespace & Session...")
-        r_get = session.get(url_login, headers=HEADERS, timeout=60)
         
-        # Validasi respon server
+        # 1. GET halaman /welcome untuk mengambil Token
+        r_get = session.get(url_form, headers=HEADERS, timeout=60)
+        
         if r_get.status_code != 200:
             print(f"❌ Server Kampus Error {r_get.status_code}. Menunggu...")
             return False
 
         soup = BeautifulSoup(r_get.text, "html.parser")
         
-        # Pencarian Token CSRF secara aman
+        # Cari token CSRF
         csrf_input = soup.find("input", {"name": "csrf_test_name"})
-        
         if csrf_input is None:
-            # Fallback: Cek apakah token ada di cookie secara langsung
             token = session.cookies.get("csrf_cookie_name")
             if not token:
                 print("❌ Gagal mendapatkan Token CSRF. Struktur HTML mungkin berubah.")
@@ -84,9 +86,18 @@ def sync_session_and_namespace():
         else:
             token = csrf_input.get("value")
 
-        # Kirim Login
+        # 2. INTEL: Cari tahu ke mana form sebenarnya di-submit (atribut action)
+        login_form = soup.find("form")
+        if login_form and login_form.get("action"):
+            url_post = login_form.get("action")
+            # Jika action-nya berupa path relatif (misal: "auth/login"), gabungkan dengan BASE_URL
+            if not url_post.startswith("http"):
+                url_post = f"{BASE_URL}/{url_post.lstrip('/')}"
+                
+        # 3. POST data login ke url_post yang sudah ditemukan
         payload = {'csrf_test_name': token, 'f1': F1_VALUE, 'f2': F2_VALUE, 'slogin': 'LOGIN'}
-        r_post = session.post(url_login, data=payload, headers={"Referer": url_login, **HEADERS}, allow_redirects=True)
+        # Perhatikan: Referer kita set ke url_form agar server mengira kita mengeklik dari halaman /welcome
+        r_post = session.post(url_post, data=payload, headers={"Referer": url_form, **HEADERS}, allow_redirects=True)
         
         # Ekstraksi Namespace dari URL setelah redirect
         if session.cookies.get("ci_session") and "logout" in r_post.text.lower():
@@ -96,7 +107,6 @@ def sync_session_and_namespace():
                 print(f"✅ Sesi Aktif. Namespace: {CURRENT_NAMESPACE[:8]}...")
                 return True
             else:
-                # Jika login sukses tapi URL tidak mengandung Hash panjang
                 print("⚠️ Login sukses tapi Namespace dinamis tidak ditemukan di URL.")
                 return False
         
