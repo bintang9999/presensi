@@ -7,13 +7,14 @@ import signal
 import sys
 import re
 import random
+import threading
+import telebot
+from telebot import types
 
 # ==================== KONFIGURASI ====================
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
-# ==================== KONFIGURASI CLOUD ====================
 # Railway akan mengambil nilai ini dari menu 'Variables' di dashboard
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID   = os.getenv("CHAT_ID")
@@ -22,9 +23,9 @@ F2_VALUE  = os.getenv("F2_VALUE")
 ID_MHS    = os.getenv("ID_MHS", "10577") # Default ke ID kamu jika tidak diatur
 
 STATE_FILE = "sudah_absen.json"
+SETTINGS_FILE = "bot_settings.json"
 BASE_URL   = "https://raising.almaata.ac.id"
 # ===========================================================
-# =====================================================
 
 session = requests.Session()
 HEADERS = {
@@ -36,20 +37,47 @@ HEADERS = {
 
 # Variable untuk menyimpan jalur (namespace) dinamis dari server
 CURRENT_NAMESPACE = "" 
-
-def send_telegram(msg):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-    except: pass
+SUDAH_ABSEN = set()
+bot = telebot.TeleBot(BOT_TOKEN)
+monitor_event = threading.Event()
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f: return set(json.load(f))
+        try:
+            with open(STATE_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
     return set()
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f: json.dump(list(state), f)
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(list(state), f)
+    except Exception as e:
+        print(f"Error saving state: {e}")
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"is_monitoring": False}
+
+def save_settings(settings):
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=4)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+
+def send_telegram(msg):
+    try:
+        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Error send_telegram: {e}")
 
 def shutdown_handler(sig, frame):
     save_state(SUDAH_ABSEN)
@@ -153,33 +181,41 @@ def tembak_presensi(idp, kode, matkul):
         send_telegram(f"❌ *SYSTEM ERROR*\n{matkul}\n`{e}`")
         return False
 
-def monitoring():
-    print("🚀 Bot v5.3 (Health Check Active) Aktif!")
-    # Kirim sinyal hidup saat pertama kali start
-    send_telegram("🚀 *Bot v5.3 Aktif*\nStatus: Memantau 24/7")
+def monitoring_loop():
+    global CURRENT_NAMESPACE, SUDAH_ABSEN
+    print("🚀 Bot Monitoring Thread Aktif!")
     
-    if not sync_session_and_namespace():
-        return
-
-    sudah_absen = load_state()
     loop_count = 0
-
     while True:
         try:
-            # Setiap 20 kali pengecekan (sekitar 1 jam), kirim kabar ke Telegram
-            # Agar kamu tahu bot masih hidup tanpa perlu nanya
+            settings = load_settings()
+            if not settings.get("is_monitoring", False):
+                print(f"⏳ [{time.strftime('%H:%M:%S')}] Pemantauan dinonaktifkan. Menunggu instruksi dari Telegram...")
+                # Menunggu event diset (jika dinonaktifkan, thread ini akan block di sini)
+                monitor_event.wait()
+                monitor_event.clear()
+                continue
+                
+            if not CURRENT_NAMESPACE:
+                if not sync_session_and_namespace():
+                    print("❌ Gagal login. Mencoba lagi dalam 60 detik...")
+                    monitor_event.wait(timeout=60)
+                    continue
+
+            # Rutin kirim laporan setiap ~1 jam (sekitar 20 kali loop jika sleep 3 menit)
             if loop_count >= 20:
                 send_telegram("🛡️ *Laporan Rutin*: Bot masih standby memantau presensi.")
                 loop_count = 0
-            
+
             api_url = f"{BASE_URL}/{CURRENT_NAMESPACE}/api/datatable/perkuliahan/daftar_pertemuan_presensi_mahasiswa/{ID_MHS}"
             r = session.get(api_url, params={"length": 15}, headers=HEADERS, timeout=60)
 
             if r.status_code != 200 or "json" not in r.headers.get("Content-Type", ""):
+                print("⚠️ Sesi habis atau server bermasalah, melakukan sinkronisasi ulang...")
                 if sync_session_and_namespace():
-                    continue 
+                    continue
                 else:
-                    time.sleep(60)
+                    monitor_event.wait(timeout=60)
                     continue
 
             data = r.json().get("data", [])
@@ -189,28 +225,126 @@ def monitoring():
                 kode = m["kode"]
                 is_done = str(m.get("status_presensi", "0"))
 
-                if kode and kode != "-" and is_done == "0" and idp not in sudah_absen:
+                if kode and kode != "-" and is_done == "0" and idp not in SUDAH_ABSEN:
                     if tembak_presensi(idp, kode, matkul):
-                        sudah_absen.add(idp)
-                        save_state(sudah_absen)
+                        SUDAH_ABSEN.add(idp)
+                        save_state(SUDAH_ABSEN)
 
             loop_count += 1
             sleep_time = random.randint(120, 180)
-            print(f"⏳ Standby [{time.strftime('%H:%M:%S')}] Namespace: {CURRENT_NAMESPACE[:8]}", end="\r")
-            time.sleep(sleep_time)
+            print(f"⏳ Standby [{time.strftime('%H:%M:%S')}] Namespace: {CURRENT_NAMESPACE[:8]}...")
+            monitor_event.wait(timeout=sleep_time)
 
         except Exception as e:
-            print(f"\n⚠️ Error: {e}")
-            time.sleep(30)
+            print(f"\n⚠️ Error di loop pemantauan: {e}")
+            monitor_event.wait(timeout=30)
             sync_session_and_namespace()
 
+
+# ==================== TELEGRAM BOT LOGIC ====================
+
+def get_main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_start = types.KeyboardButton("🟢 Mulai Pantau")
+    btn_stop = types.KeyboardButton("🔴 Hentikan Pantau")
+    btn_status = types.KeyboardButton("📊 Status Bot")
+    markup.row(btn_start, btn_stop)
+    markup.row(btn_status)
+    return markup
+
+def is_authorized(message):
+    # Bandingkan sebagai string untuk menghindari tipe data yang tidak cocok
+    return str(message.chat.id) == str(CHAT_ID)
+
+@bot.message_handler(func=lambda msg: not is_authorized(msg))
+def unauthorized(message):
+    bot.reply_to(message, "⛔ Maaf, Anda tidak memiliki izin untuk mengontrol bot ini.")
+
+@bot.message_handler(commands=['start', 'menu'])
+def send_welcome(message):
+    settings = load_settings()
+    is_mon = settings.get("is_monitoring", False)
+    status_text = "🟢 Aktif" if is_mon else "🔴 Nonaktif"
+    
+    welcome_msg = (
+        "👋 *Halo! Selamat datang di Bot Controller Presensi.*\n\n"
+        f"Status Pemantauan Saat Ini: *{status_text}*\n\n"
+        "Gunakan tombol di bawah untuk mengontrol bot:"
+    )
+    bot.send_message(message.chat.id, welcome_msg, parse_mode="Markdown", reply_markup=get_main_menu())
+
+@bot.message_handler(func=lambda msg: msg.text == "🟢 Mulai Pantau")
+def handle_start_monitoring(message):
+    settings = load_settings()
+    settings["is_monitoring"] = True
+    save_settings(settings)
+    
+    monitor_event.set()
+    
+    bot.send_message(
+        message.chat.id,
+        "🟢 *Pemantauan Presensi Diaktifkan!*\n"
+        "Bot sekarang memantau presensi Anda setiap 2-3 menit di latar belakang secara otomatis.",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
+    )
+
+@bot.message_handler(func=lambda msg: msg.text == "🔴 Hentikan Pantau")
+def handle_stop_monitoring(message):
+    settings = load_settings()
+    settings["is_monitoring"] = False
+    save_settings(settings)
+    
+    bot.send_message(
+        message.chat.id,
+        "🔴 *Pemantauan Presensi Dihentikan!*\n"
+        "Bot tidak akan mengecek ke server kampus, tetapi bot tetap standby menerima perintah.",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
+    )
+
+@bot.message_handler(func=lambda msg: msg.text == "📊 Status Bot")
+def handle_status(message):
+    settings = load_settings()
+    is_mon = settings.get("is_monitoring", False)
+    status_text = "🟢 Aktif (Memantau)" if is_mon else "🔴 Nonaktif (Pause)"
+    
+    session_text = "Terhubung ✅" if CURRENT_NAMESPACE else "Belum Login / Sesi Kedaluwarsa ❌"
+    
+    total_absen = len(SUDAH_ABSEN)
+    
+    status_msg = (
+        "📊 *STATUS BOT PRESENSI*\n\n"
+        f"• *Auto-Monitoring:* {status_text}\n"
+        f"• *Sesi Kampus:* {session_text}\n"
+        f"• *Namespace:* `{CURRENT_NAMESPACE[:8] if CURRENT_NAMESPACE else '-'}`\n"
+        f"• *Total Absen Tersimpan:* `{total_absen}` kelas\n"
+        f"• *Mahasiswa ID:* `{ID_MHS}`"
+    )
+    bot.send_message(message.chat.id, status_msg, parse_mode="Markdown", reply_markup=get_main_menu())
+
 # ===================== RUN ===========================
-SUDAH_ABSEN = load_state()
 
 if __name__ == "__main__":
-
-    monitoring()
-
-
-
-
+    # Load state awal
+    SUDAH_ABSEN = load_state()
+    
+    # Ambil pengaturan awal
+    settings = load_settings()
+    
+    # Jalankan background thread
+    t = threading.Thread(target=monitoring_loop, daemon=True)
+    t.start()
+    
+    # Jika di setting bernilai true, aktifkan pemantauan
+    if settings.get("is_monitoring", False):
+        monitor_event.set()
+        
+    print("🚀 Bot Controller Aktif!")
+    try:
+        send_telegram("🚀 *Bot Presensi Telah Dinyalakan!*\nStatus: Standby.\nKirim /menu atau gunakan tombol di bawah untuk interaksi.")
+    except Exception as e:
+        print(f"Gagal mengirim pesan startup: {e}")
+        
+    # Jalankan polling Telegram
+    bot.infinity_polling()
