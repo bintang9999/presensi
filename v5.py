@@ -10,7 +10,9 @@ import random
 
 # ==================== KONFIGURASI ====================
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 # ==================== KONFIGURASI CLOUD ====================
 # Railway akan mengambil nilai ini dari menu 'Variables' di dashboard
 BOT_TOKEN = os.getenv("BOT_TOKEN")

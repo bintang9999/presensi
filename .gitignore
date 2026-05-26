@@ -1,0 +1,5 @@
+.env
+venv/
+sudah_absen.json
+__pycache__/
+*.log
